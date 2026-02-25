@@ -1,0 +1,29 @@
+# Gossip P2P Network — CSL3080 Assignment 1
+# Compiled binaries
+seed
+peer
+Assignment-1-CSL3080.pdf
+# Build artifacts
+*.o
+*.a
+
+# Log output files
+seed_output_*.txt
+peer_output_*.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Zone.Identifier (Windows artifact)
+*.Zone.Identifier
+
+# PDF (already in repo, but no need to track generated ones)
