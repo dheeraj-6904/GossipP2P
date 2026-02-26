@@ -1,11 +1,10 @@
 /*
  * seed.cpp — Seed Node for Gossip-based P2P Network
- * Assignment 1, CSL3080 — Computer Networks
  *
  * Compile: g++ -std=c++17 -pthread -Wall -Wextra -O2 -o seed src/seed.cpp
  * Usage  : ./seed <port> [config_file]
  *
- * The SeedNode class:
+ * The SeedNode class Properties:
  *  - Listens for TCP connections from peers and other seed nodes.
  *  - Maintains a Peer List (PL) of registered peers.
  *  - Uses quorum-based (floor(n/2)+1) consensus across all seed nodes before admitting or removing a peer.
@@ -39,6 +38,9 @@ using sock_t = int;
 static constexpr sock_t SOCK_INVALID = -1;
 static constexpr int    SOCK_ERR     = -1;
 #define CLOSE_SOCK(s) ::close(s)
+
+// SOCK_INVALID: sentinel value for invalid/closed sockets
+// CLOSE_SOCK: helper macro to close a socket using the POSIX close()
 
 //Helpers
 static string now_str() {
@@ -122,6 +124,10 @@ public:
                 continue;
             }
             // create detached handler thread
+            // We allocate a heap slot for the accepted socket so the
+            // detached thread can safely take ownership and delete it
+            // when done. The thread calls `dispatch()` to handle the
+            // protocol for this connection.
             sock_t *cp = new sock_t(conn);
             thread([this, cp]() {
                 sock_t c = *cp; delete cp;
@@ -137,6 +143,8 @@ private:
         ifstream fin(f);
         if (!fin) throw runtime_error("Cannot open config: " + f);
         string line;
+
+        // Parse the config file line by line. Each line should be in the format
         while (getline(fin, line)) {
             if (line.empty()) continue;
             if (line.back() == '\r') line.pop_back();
@@ -147,7 +155,9 @@ private:
             if (ip == myIp_ && pt == myPort_) continue; // skip self
             otherSeeds_.push_back({ip, pt});
         }
+        // total seeds = other seeds found in config + this node
         numSeeds_ = (int)otherSeeds_.size() + 1;
+        // quorum: simple majority (floor(n/2) + 1)
         quorum_   = numSeeds_ / 2 + 1;
         log("[CONFIG] seeds=" + to_string(numSeeds_) +
             " quorum=" + to_string(quorum_));
@@ -170,6 +180,8 @@ private:
         sock_t s = socket(AF_INET, SOCK_STREAM, 0);
         if (s == SOCK_INVALID) throw runtime_error("socket() failed");
         int opt = 1;
+
+        // Set SO_REUSEADDR to allow quick restarts. This is important for development and testing, but in production you might want to handle this differently.
         setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
@@ -186,12 +198,19 @@ private:
         sock_t s = socket(AF_INET, SOCK_STREAM, 0);
         if (s == SOCK_INVALID) return SOCK_INVALID;
         struct timeval tv; tv.tv_sec = 2; tv.tv_usec = 0;
+
+        // Set timeouts for connect, send, and receive operations. 
+        // This prevents the seed from hanging indefinitely if a peer or another seed is 
+        // unresponsive. In a production system, you might want to make these timeouts configurable.
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         struct sockaddr_in addr;
+
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port   = htons((unsigned short)port);
+
+        // Convert the IP address from string format to binary form and store it in the sockaddr_in structure.
         inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
         if (connect(s, (struct sockaddr*)&addr, sizeof(addr)) == SOCK_ERR) {
             CLOSE_SOCK(s); return SOCK_INVALID;
@@ -204,13 +223,24 @@ private:
         string line;
         if (!recv_line(conn, line)) { CLOSE_SOCK(conn); return; }
 
-        if (line.size() >  9 && line.substr(0,  9) == "REGISTER " ) handleRegister(conn, line.substr(9));
-        else if (line.size() >  9 && line.substr(0,  9) == "VOTE_REG " ) handleVoteReg(conn, line.substr(9));
-        else if (line.size() > 11 && line.substr(0, 11) == "COMMIT_REG ") handleCommitReg(conn, line.substr(11));
-        else if (line.size() >= 13 && line.substr(0,13) == "GET_PEER_LIST") handleGetPeerList(conn);
-        else if (line.size() > 10 && line.substr(0, 10) == "DEAD_NODE " ) handleDeadNode(conn, line.substr(10));
-        else if (line.size() > 12 && line.substr(0, 12) == "COMMIT_DEAD ") handleCommitDead(conn, line.substr(12));
-        else log("[WARN] Unknown: " + line);
+        // The protocol is line-based. Inspect the prefix to determine
+        // which handler should be invoked. Each branch strips the
+        // command prefix and passes the payload to the appropriate
+        // handler function.
+        if (line.size() >  9 && line.substr(0,  9) == "REGISTER " )
+            handleRegister(conn, line.substr(9));
+        else if (line.size() >  9 && line.substr(0,  9) == "VOTE_REG " )
+            handleVoteReg(conn, line.substr(9));
+        else if (line.size() > 11 && line.substr(0, 11) == "COMMIT_REG ")
+            handleCommitReg(conn, line.substr(11));
+        else if (line.size() >= 13 && line.substr(0,13) == "GET_PEER_LIST")
+            handleGetPeerList(conn);
+        else if (line.size() > 10 && line.substr(0, 10) == "DEAD_NODE " )
+            handleDeadNode(conn, line.substr(10));
+        else if (line.size() > 12 && line.substr(0, 12) == "COMMIT_DEAD ")
+            handleCommitDead(conn, line.substr(12));
+        else
+            log("[WARN] Unknown: " + line);
 
         CLOSE_SOCK(conn);
     }
@@ -223,10 +253,16 @@ private:
             send_msg(conn, "ERR bad payload");
             return;
         }
+
+        // Extract the peer's IP and port from the payload. The expected format is "IP:PORT". 
+        // We also construct a unique key for the peer in the form "IP:PORT" which will be used in the peer list and for voting.
         string pIp  = payload.substr(0, c);
         int pPort = stoi(payload.substr(c + 1));
         string pKey = pIp + ":" + to_string(pPort);
 
+
+        // Check if the peer is already registered. This is a quick check to 
+        // avoid unnecessary voting if we already know about this peer.
         {
             lock_guard<mutex> lk(plMtx_);
             if (peerList_.count(pKey)) {
@@ -236,8 +272,17 @@ private:
             }
         }
 
+        
+        // Start the voting process to register this new peer. 
+        // The proposer is this seed node, and it will ask all other seeds for their vote. 
+        // Each seed will respond with a simple "VOTE_OK" if they approve the registration. 
+        // The proposer counts the votes and checks if it has reached the quorum required to admit the peer.
         int votes = 1;
         string proposer = myIp_ + ":" + to_string(myPort_);
+
+        // Ask every other configured seed for its vote. Each request
+        // is a short-lived TCP connection; failures are treated as
+        // non-votes (logged), not fatal.
         for (auto &seed : otherSeeds_) {
             sock_t s = connectTo(seed.ip, seed.port);
             if (s == SOCK_INVALID) { log("[REG] Unreachable: " + seed.key()); continue; }
@@ -255,6 +300,9 @@ private:
                 lock_guard<mutex> lk(plMtx_);
                 peerList_[pKey] = {pIp, pPort};
             }
+            // If we reached quorum, persist the peer locally and
+            // broadcast a COMMIT_REG to all other seeds to make the
+            // change durable cluster-wide.
             log("[REG] COMMITTED " + pKey);
             for (auto &seed : otherSeeds_) {
                 sock_t s = connectTo(seed.ip, seed.port);
@@ -272,6 +320,9 @@ private:
 
     void handleVoteReg(sock_t conn, const string &payload) {
         log("[VOTE_REG] " + payload);
+        // This seed always votes OK in the simple protocol implemented
+        // here. A more advanced implementation could check liveness or
+        // policy before voting.
         send_msg(conn, "VOTE_OK");
     }
 
@@ -287,6 +338,8 @@ private:
             lock_guard<mutex> lk(plMtx_);
             peerList_[pKey] = {ip, pt};
         }
+        // Commit a peer that another seed requested to add. This makes
+        // the operation idempotent: repeated commits are safe.
         log("[COMMIT_REG] " + pKey);
         send_msg(conn, "ACK_COMMIT");
     }
@@ -295,6 +348,9 @@ private:
     void handleGetPeerList(sock_t conn) {
         lock_guard<mutex> lk(plMtx_);
         string resp = "PEER_LIST";
+
+        // Respond with the current peer list. The format is a simple 
+        // space-separated list of "IP:PORT" entries following the "PEER_LIST" prefix.
         for (auto &[key, _] : peerList_) resp += " " + key;
         send_msg(conn, resp);
         log("[PL] Sent " + to_string(peerList_.size()) + " entries.");
@@ -314,6 +370,9 @@ private:
         else if (f.size() >= 4) reporter = f[3];
         send_msg(conn, "ACK_DEAD received");
 
+        // Record a report that `deadKey` is suspected dead, coming from
+        // `reporter`. We keep the set of distinct reporters so duplicate
+        // reports from the same reporter count only once.
         int cnt = 0;
         {
             lock_guard<mutex> lk(deadMtx_);
@@ -331,6 +390,9 @@ private:
                 if (!already) committedDead_.insert(deadKey);
             }
             if (!already) {
+                // We reached quorum for marking the peer dead. Broadcast
+                // a commit to all other seeds and remove the peer from
+                // the local peer list.
                 for (auto &seed : otherSeeds_) {
                     sock_t s = connectTo(seed.ip, seed.port);
                     if (s == SOCK_INVALID) continue;
@@ -350,6 +412,8 @@ private:
             already = (committedDead_.count(dKey) > 0);
             if (!already) committedDead_.insert(dKey);
         }
+        // Commit a dead peer reported by another seed. If this seed
+        // hasn't already processed the commit, remove the peer locally.
         if (!already) removePeer(dKey);
         send_msg(conn, "ACK_COMMIT_DEAD");
     }
@@ -362,22 +426,33 @@ private:
     }
 
     // Members 
+    // `myIp_` / `myPort_`: address where this seed listens
+    // `serverSock_`: TCP listening socket for incoming connections
+    // `running_`: flag used to stop the accept loop and shut down
     string  myIp_;
     int myPort_;
     sock_t serverSock_ = SOCK_INVALID;
     atomic<bool> running_;
 
+    // `otherSeeds_`: list of other seed nodes (from config) used for
+    // cross-seed quorum communication.
     vector<PeerInfo> otherSeeds_;
     int numSeeds_ = 0;
     int quorum_   = 1;
 
+    // `plMtx_` and `peerList_`: protect and store the known peers.
     mutex plMtx_;
     map<string, PeerInfo> peerList_;
 
+    // `deadMtx_`, `deadReports_`: track which reporters have flagged a
+    // peer as dead. `committedDead_` holds keys for which the cluster
+    // has already committed the dead decision.
     mutex deadMtx_;
     map<string, set<string>> deadReports_;
     set<string> committedDead_;
 
+    // `logMtx_` and `logFile_`: serialized logging to both stdout and
+    // an on-disk file `seed_output_<port>.txt`.
     mutex logMtx_;
     ofstream logFile_;
 };
@@ -390,6 +465,8 @@ int main(int argc, char *argv[]) {
     }
     int port = stoi(argv[1]);
     string cfg = (argc >= 3) ? argv[2] : "config.txt";
+
+    // Create and start the seed node. The constructor loads the configuration
     try {
         SeedNode node("127.0.0.1", port, cfg);
         node.start();
