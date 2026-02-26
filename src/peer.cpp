@@ -90,6 +90,8 @@ static vector<string> str_split(const string &s, char d) {
 }
 
 static long long unix_ts() {
+    // returns the current Unix timestamp ->
+    // the number of seconds elapsed since 1 Jan 1970 UTC — as a long long integer
     return (long long)chrono::duration_cast<chrono::seconds>(
         chrono::system_clock::now().time_since_epoch()).count();
 }

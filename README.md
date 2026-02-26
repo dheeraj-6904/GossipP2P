@@ -1,11 +1,11 @@
-# Gossip-based P2P Network — CSL3080 Assignment 1
+# Gossip-based P2P Network
 
 A C++ implementation of a gossip-based peer-to-peer (P2P) network on Linux featuring:
 
 - **Seed nodes** (`src/seed.cpp`) — bootstrap the network, maintain a Peer List (PL), and perform quorum-based consensus for peer registration and dead-node removal.
 - **Peer nodes** (`src/peer.cpp`) — self-register with seeds, select TCP neighbors using power-law preferential attachment, broadcast gossip messages, detect dead nodes via two-level consensus (peer-level → seed-level).
 
-Both nodes use C++17 OOP (`SeedNode` / `PeerNode`) with standard POSIX threads (`std::thread`, `std::mutex`).
+Both nodes use C++17  (`SeedNode` / `PeerNode`) with standard POSIX threads (`std::thread`, `std::mutex`).
 
 ---
 
