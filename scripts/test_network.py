@@ -26,7 +26,7 @@ import socket
 import re
 from pathlib import Path
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
+# Configuration 
 
 SEED_PORTS      = [5000, 5001, 5002]
 PEER_PORTS      = [6000, 6001, 6002, 6003, 6004]
@@ -36,7 +36,7 @@ GOSSIP_WAIT     = 40  # seconds to let gossip propagate
 LIVENESS_WAIT   = 70  # seconds for liveness detection round-trip
 CONNECT_TIMEOUT = 2   # socket connect timeout in seconds
 
-# ─── Colour helpers ─────────────────────────────────────────────────────────────
+# Colour helpers
 
 GREEN  = "\033[92m"
 RED    = "\033[91m"
@@ -47,7 +47,7 @@ def ok(msg):   print(f"  {GREEN}✓ PASS{RESET}  {msg}")
 def fail(msg): print(f"  {RED}✗ FAIL{RESET}  {msg}")
 def info(msg): print(f"  {YELLOW}ℹ INFO{RESET}  {msg}")
 
-# ─── Process management ─────────────────────────────────────────────────────────
+# Process management
 
 procs = []
 
@@ -74,7 +74,7 @@ def kill_proc(p):
     except Exception:
         pass
 
-# ─── Port availability check ────────────────────────────────────────────────────
+# Port availability chec
 
 def wait_for_port(port, timeout=10):
     """Return True when something starts listening on port."""
@@ -90,7 +90,7 @@ def wait_for_port(port, timeout=10):
         time.sleep(0.5)
     return False
 
-# ─── Log helpers ────────────────────────────────────────────────────────────────
+# Log helpers
 
 def read_log(path):
     try:
@@ -102,7 +102,7 @@ def read_log(path):
 def logs_contain(path, pattern):
     return bool(re.search(pattern, read_log(path)))
 
-# ─── Test helpers ────────────────────────────────────────────────────────────────
+# Test helpers
 
 results = []
 
@@ -114,7 +114,7 @@ def assert_test(name, condition, detail=""):
         fail(name + (f" — {detail}" if detail else ""))
         results.append((name, False))
 
-# ─── Main test routine ──────────────────────────────────────────────────────────
+# Main test routine
 
 def main(exe_dir):
     os.chdir(exe_dir)
@@ -123,7 +123,7 @@ def main(exe_dir):
     print("  CSL3080 Assignment 1 — Automated Network Test")
     print("="*60 + "\n")
 
-    # ── 0. Pre-flight: check binaries ─────────────────────────────────────────
+    # check binaries
     seed_path = Path(exe_dir) / "seed"
     peer_path = Path(exe_dir) / "peer"
 
@@ -134,14 +134,14 @@ def main(exe_dir):
         print(f"{RED}[ERROR]{RESET} peer binary not found at {peer_path}. Run 'make' first.")
         sys.exit(1)
 
-    # ── 1. Write config.txt ───────────────────────────────────────────────────
+    # Write config.txt
     print("[STEP 1] Writing config.txt ...")
     with open("config.txt", "w") as f:
         for port in SEED_PORTS:
             f.write(f"{HOST}:{port}\n")
     info(f"config.txt written with {len(SEED_PORTS)} seeds.")
 
-    # ── 2. Start seed nodes ───────────────────────────────────────────────────
+    # Start seed node
     print("\n[STEP 2] Starting seed nodes ...")
     seed_procs = []
     for port in SEED_PORTS:
@@ -154,7 +154,7 @@ def main(exe_dir):
         up = wait_for_port(port, timeout=8)
         assert_test(f"Seed {port} is listening", up)
 
-    # ── 3. Start peer nodes ───────────────────────────────────────────────────
+    # Start peer nodes
     print("\n[STEP 3] Starting peer nodes ...")
     peer_procs = []
     for port in PEER_PORTS:
@@ -163,7 +163,7 @@ def main(exe_dir):
         peer_procs.append(p)
         time.sleep(STARTUP_WAIT)
 
-    # ── 4. Check peer registration via seed logs ──────────────────────────────
+    # Check peer registration via seed logs
     print(f"\n[STEP 4] Verifying peer registration (waiting {STARTUP_WAIT}s extra) ...")
     time.sleep(STARTUP_WAIT)
 
@@ -184,7 +184,7 @@ def main(exe_dir):
         acked = logs_contain(f"peer_output_{peer_port}.txt", r"Registered with")
         assert_test(f"Peer {peer_port} got registration ACK", acked)
 
-    # ── 5. Wait for gossip propagation ────────────────────────────────────────
+    # Wait for gossip propagation
     print(f"\n[STEP 5] Waiting {GOSSIP_WAIT}s for gossip to propagate ...")
     time.sleep(GOSSIP_WAIT)
 
@@ -218,7 +218,7 @@ def main(exe_dir):
 
     assert_test("Gossip propagated across at least 2 peers", cross_peer_gossip)
 
-    # ── 6. Dead-node detection ────────────────────────────────────────────────
+    # Dead-node detection
     print(f"\n[STEP 6] Killing peer {PEER_PORTS[-1]} to test dead-node detection ...")
     target_peer = peer_procs[-1]
     target_port = PEER_PORTS[-1]
@@ -252,7 +252,7 @@ def main(exe_dir):
         "Check seed_output_*.txt for 'Removed' lines"
     )
 
-    # ── 7. Shutdown & summary ─────────────────────────────────────────────────
+    # Shutdown & summary
     print("\n[STEP 7] Shutting down all nodes ...")
     kill_all()
 

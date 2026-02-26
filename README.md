@@ -83,10 +83,10 @@ Each node writes logs to:
 make
 
 # Run tests from project root
-python scripts/test_network.py
+python3 scripts/test_network.py
 
 # Or specify binary directory explicitly
-python scripts/test_network.py --exe-dir .
+python3 scripts/test_network.py --exe-dir .
 ```
 
 The script:
