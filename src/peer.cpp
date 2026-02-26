@@ -42,7 +42,7 @@
 
 using namespace std;
 
-// Type aliases ────────────────────────────────────────────────────────────── */
+// Type aliases
 using sock_t = int;
 static constexpr sock_t SOCK_INVALID = -1;
 static constexpr int    SOCK_ERR     = -1;
@@ -57,6 +57,7 @@ static string now_str() {
     return string(buf);
 }
 
+// Send full message over socket, appending newline and handling partial sends
 static bool send_msg(sock_t s, const string &msg) {
     string f = msg + "\n";
     int total = (int)f.size(), sent = 0;
@@ -69,6 +70,7 @@ static bool send_msg(sock_t s, const string &msg) {
     return true;
 }
 
+// Receive a single line, returns false on socket error/close
 static bool recv_line(sock_t s, string &out) {
     out.clear();
     char ch;
@@ -81,6 +83,7 @@ static bool recv_line(sock_t s, string &out) {
     }
 }
 
+// Split string by delimiter into vector of tokens
 static vector<string> str_split(const string &s, char d) {
     vector<string> v;
     stringstream ss(s);
@@ -89,9 +92,9 @@ static vector<string> str_split(const string &s, char d) {
     return v;
 }
 
+// Current unix timestamp in seconds
 static long long unix_ts() {
-    // returns the current Unix timestamp ->
-    // the number of seconds elapsed since 1 Jan 1970 UTC — as a long long integer
+    // seconds since epoch
     return (long long)chrono::duration_cast<chrono::seconds>(
         chrono::system_clock::now().time_since_epoch()).count();
 }
@@ -100,10 +103,12 @@ static long long unix_ts() {
 struct PeerInfo {
     string ip;
     int         port;
+    // Unique key for peer 
     string key() const { return ip + ":" + to_string(port); }
 };
 
 // PeerNode
+// Core peer node implementation: registration, gossip, liveness, neighbors
 
 class PeerNode {
 public:
@@ -146,6 +151,7 @@ public:
 private:
     // Config
     void loadSeeds(const string &f) {
+        // Read seed entries from config file
         ifstream fin(f);
         if (!fin) throw runtime_error("Cannot open: " + f);
         string line;
@@ -159,12 +165,14 @@ private:
             allSeeds_.push_back({ip, pt});
         }
         numSeeds_ = (int)allSeeds_.size();
+        // quorum is majority of seeds
         quorum_   = numSeeds_ / 2 + 1;
         log("[CONFIG] seeds=" + to_string(numSeeds_) +
             " quorum=" + to_string(quorum_));
     }
 
     void openLog() {
+        // Open per-peer log file
         string fname = "peer_output_" + to_string(myPort_) + ".txt";
         logFile_.open(fname, ios::app);
     }
@@ -178,6 +186,7 @@ private:
 
     // Sockets
     sock_t makeServerSocket(int port) {
+        // Create, bind and listen on a TCP server socket
         sock_t s = socket(AF_INET, SOCK_STREAM, 0);
         if (s == SOCK_INVALID) throw runtime_error("socket() failed");
         int opt = 1;
@@ -194,6 +203,7 @@ private:
     }
 
     sock_t connectTo(const string &ip, int port, int tSec = 3) {
+        // Connect to a peer with short send or recv timeouts
         sock_t s = socket(AF_INET, SOCK_STREAM, 0);
         if (s == SOCK_INVALID) return SOCK_INVALID;
         struct timeval tv; tv.tv_sec = tSec; tv.tv_usec = 0;
@@ -214,6 +224,7 @@ private:
     bool registerWithSeeds() {
         string myKey = myIp_ + ":" + to_string(myPort_);
         vector<PeerInfo> shuffled = allSeeds_;
+        // Shuffle seed list to randomize registration order
         mt19937 rng((unsigned)time(nullptr) ^ (unsigned)myPort_);
         shuffle(shuffled.begin(), shuffled.end(), rng);
 
@@ -222,6 +233,7 @@ private:
             if (acked >= quorum_) break;
             sock_t s = connectTo(seed.ip, seed.port);
             if (s == SOCK_INVALID) { log("[REG] Unreachable: " + seed.key()); continue; }
+            // Send REGISTER request to seed
             send_msg(s, "REGISTER " + myKey);
             string resp;
             if (recv_line(s, resp)) {
@@ -246,6 +258,7 @@ private:
         for (auto &seed : contactedSeeds_) {
             sock_t s = connectTo(seed.ip, seed.port);
             if (s == SOCK_INVALID) continue;
+            // Request peer list from seed
             send_msg(s, "GET_PEER_LIST");
             string resp;
             if (recv_line(s, resp)) {
@@ -257,6 +270,7 @@ private:
                     if (c == string::npos) continue;
                     string pip = parts[j].substr(0, c);
                     int pp = stoi(parts[j].substr(c + 1));
+                    // Add peer to merged map keyed by ip:port
                     merged[parts[j]] = {pip, pp};
                 }
             }
@@ -274,11 +288,13 @@ private:
             log("[NEIGHBORS] No peers available.");
             return;
         }
+        // Choose number of neighbors k based on log-size
         int k = max(1, min((int)peers.size(),
                           (int)log2((double)peers.size() + 1) + 2));
 
         vector<double> w(peers.size());
         for (size_t i = 0; i < peers.size(); ++i)
+            // power-law weight decreasing with rank
             w[i] = 1.0 / pow((double)(i + 1), 1.5);
 
         mt19937 rng((unsigned)time(nullptr) ^ (unsigned)myPort_);
@@ -309,6 +325,7 @@ private:
         for (auto &[key, info] : neighbor_) {
             sock_t s = connectTo(info.ip, info.port);
             if (s != SOCK_INVALID) {
+                // Store socket and perform handshake
                 neighborSocks_[key] = s;
                 send_msg(s, "HELLO " + myIp_ + ":" + to_string(myPort_));
                 log("[CONNECT] → " + key);
@@ -339,6 +356,7 @@ private:
     void handleIncoming(sock_t conn) {
         string line;
         while (recv_line(conn, line)) {
+            // Simple command parsing: HELLO, GOSSIP, IS_ALIVE?, IS_DEAD?
             if (line.size() > 6 && line.substr(0, 6) == "HELLO ") {
                 string senderKey = line.substr(6);
                 lock_guard<mutex> lk(neighborMtx_);
@@ -358,10 +376,13 @@ private:
                     }
                 }
             } else if (line.size() > 7 && line.substr(0, 7) == "GOSSIP ") {
+                // Received gossip message from a peer
                 receiveGossip(line.substr(7), conn);
             } else if (line == "IS_ALIVE?") {
+                // Liveness probe response
                 send_msg(conn, "ALIVE");
             } else if (line.size() > 9 && line.substr(0, 9) == "IS_DEAD? ") {
+                // Consensus check: is the given peer dead?
                 handleIsDead(conn, line.substr(9));
             }
         }
@@ -392,6 +413,7 @@ private:
         string msg = to_string(ts) + ":" + myIp_ + ":" + 
                           to_string(myPort_) + ":" + to_string(n);
         log("[GOSSIP] Generated: " + msg);
+        // Record locally and flood to neighbors
         addToML(msg);
         broadcastGossip(msg, SOCK_INVALID);
     }
@@ -403,6 +425,7 @@ private:
             if (ml_.count(h)) return;
             ml_.insert(h);
         }
+        // First time seen: log and forward to other neighbors
         log("[GOSSIP] Received (first): " + msg);
         broadcastGossip(msg, from);
     }
@@ -411,6 +434,7 @@ private:
         lock_guard<mutex> lk(neighborMtx_);
         for (auto &[_, s] : neighborSocks_) {
             if (s == except) continue;
+            // Send gossip to neighbor
             send_msg(s, "GOSSIP " + msg);
         }
     }
@@ -433,6 +457,7 @@ private:
     }
 
     void pingAllNeighbors() {
+        // Collect snapshot of neighbors to probe
         vector<pair<string, PeerInfo>> targets;
         {
             lock_guard<mutex> lk(neighborMtx_);
@@ -456,6 +481,7 @@ private:
     }
 
     bool probePeer(const string &ip, int port) {
+        // Quick probe: connect and ask IS_ALIVE?
         sock_t s = connectTo(ip, port, 2);
         if (s == SOCK_INVALID) return false;
         send_msg(s, "IS_ALIVE?");
@@ -472,6 +498,7 @@ private:
             for (auto &[key, info] : neighbor_)
                 if (key != dead.key()) others.push_back({key, info});
         }
+        // Ask other neighbors whether they also see the peer as dead
         int confirmations = 1, total = (int)others.size() + 1;
         for (auto &[_, info] : others) {
             sock_t s = connectTo(info.ip, info.port, 2);
@@ -492,6 +519,7 @@ private:
         if (c == string::npos) { send_msg(conn, "UNKNOWN"); return; }
         string ip = pKey.substr(0, c);
         int pt = stoi(pKey.substr(c + 1));
+        // Check locally and reply whether we confirm the peer is dead
         bool alive = probePeer(ip, pt);
         send_msg(conn, alive ? "NOT_DEAD" : "CONFIRMED_DEAD");
     }
@@ -506,6 +534,7 @@ private:
                              to_string(ts) + ":" + myIp_;
         log("[DEAD] Reporting: " + report);
 
+        // Notify all seeds about the dead node
         for (auto &seed : allSeeds_) {
             sock_t s = connectTo(seed.ip, seed.port, 3);
             if (s == SOCK_INVALID) continue;
@@ -560,6 +589,7 @@ int main(int argc, char *argv[]) {
     }
     int port = stoi(argv[1]);
     string cfg = (argc >= 3) ? argv[2] : "config.txt";
+    // Create peer listening on localhost and start protocol
     try {
         PeerNode node("127.0.0.1", port, cfg);
         node.start();
