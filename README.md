@@ -1,5 +1,8 @@
 # Gossip-based P2P Network
 
+## Computer Netwroks: CSL3080
+### Dheeraj Kumar (B23CS1016), Luv Valecha (B23CS1093)
+
 A C++ implementation of a gossip-based peer-to-peer (P2P) network on Linux featuring:
 
 - **Seed nodes** (`src/seed.cpp`) — bootstrap the network, maintain a Peer List (PL), and perform quorum-based consensus for peer registration and dead-node removal.
@@ -116,3 +119,66 @@ The script:
 2. Asks other neighbors `IS_DEAD? <IP>:<Port>`.
 3. On peer-level quorum confirmation → sends `Dead Node:...` to all seeds.
 4. Seeds collect reports; on seed-level quorum → remove peer from all PLs.
+
+---
+
+## About this project
+
+- **Purpose:** a compact C++ implementation that satisfies the assignment's
+	required components: seed-based bootstrapping, quorum registration,
+	gossip dissemination, neighbor selection, and dead-node handling.
+- **Registration & quorum:** peers register with seeds and require
+	floor(n/2)+1 acknowledgements; seeds run a simple vote/commit quorum
+	before adding peers to the PL (`src/seed.cpp`).
+- **Topology:** peers merge seed PLs and choose ~k neighbors using a
+	power-law sampling (weights ∝ 1/(rank)^1.5) to approximate a
+	scale-free/unstructured overlay (`src/peer.cpp`).
+- **Gossip:** peers generate time-stamped messages, use a local ML for
+	deduplication, and flood messages to neighbors (epidemic forwarding).
+- **Liveness & consensus:** peers ping neighbors and run a neighbor-level
+	consensus (`IS_DEAD?`) before reporting to seeds; seeds use reporter
+	quorums to commit removal from PLs.
+- **Testing & logs:** `scripts/test_network.py` exercises the system and
+	nodes write logs to `seed_output_<port>.txt` / `peer_output_<port>.txt`.
+
+If you want, I can also add a short Usage example showing a minimal
+run sequence (seeds → peers → run tests).
+
+---
+
+## Architecture Diagram
+
+The ASCII diagram below summarizes the main components and message flows
+(bootstrap, neighbor selection, gossip, liveness, and dead-node reporting):
+
+```
+													 +-----------------------------+
+													 |        Seed Cluster         |
+													 | [Seed 5000] [Seed 5001]    |
+													 | [Seed 5002]                |
+													 +-----------------------------+
+																		 ^    ^    ^
+																		 |    |    |
+							ACK_REG / PEER_LIST <--+    |    +-- DEAD_REPORTS
+																					|
+																					|
+	+-------------------------------------------------------------------------+
+	|                         Peer Node (single instance)                    |
+	|                                                                         |
+	|  Start -> REGISTER (quorum across seeds) -> GET_PEER_LIST (merge PLs)   |
+	|                                                                         |
+	|  Select neighbors (power-law sampling) -> Connect (TCP HELLO/handshake) |
+	|                                                                         |
+	|  Generate gossip msgs (every 5s, <=10)                                  |
+	|    -> add hash to ML (dedup) -> Flood to neighbors (GOSSIP)            |
+	|    -> neighbors forward if first-seen                                   |
+	|                                                                         |
+	|  Periodic ping neighbors -> on repeated failures run IS_DEAD? consensus |
+	|    -> if peer-level quorum confirms -> REPORT DEAD to seeds            |
+	|                                                                         |
+	+-------------------------------------------------------------------------+
+
+	Seed behavior: collect reports from peers; if seed-level quorum reached
+	the seeds COMMIT removal of the peer from the cluster Peer List (PL).
+
+```
